@@ -37,6 +37,7 @@ import threading
 import time
 import traceback
 import urllib.request
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -8468,36 +8469,49 @@ def wiki(cli, nick, chan, rest):
 
     # no arguments, just print a link to the wiki
     if not rest:
-        reply(cli, nick, chan, "https://github.com/lykoss/lykos/wiki")
+        reply(cli, nick, chan, "https://werewolf.chat")
         return
+    # Check for valid page name
+    if not re.fullmatch("[\w ]+", rest):
+        reply(cli, nick, chan, messages["wiki_invalid_page"])
+        return
+    rest = rest.replace(" ", "_").lower()
 
+    # Fetch a page from the api, in json format
     try:
-        page = urllib.request.urlopen("https://raw.githubusercontent.com/wiki/lykoss/lykos/Home.md", timeout=2).read().decode("ascii", errors="replace")
+        URL = "http://werewolf.chat/w/api.php?action=query&prop=extracts&exintro=true&explaintext=true&titles={0}&format=json"
+        response = urllib.request.urlopen(URL.format(rest), timeout=2).read().decode("ascii", errors="replace")
     except (urllib.error.URLError, socket.timeout):
         reply(cli, nick, chan, messages["wiki_request_timed_out"], private=True)
         return
-    if not page:
+    if not response:
+        reply(cli, nick, chan, messages["wiki_no_open"], private=True)
+        return
+    parsed = json.loads(response)
+    if not parsed:
         reply(cli, nick, chan, messages["wiki_no_open"], private=True)
         return
 
-    query = re.escape(rest.strip())
-    # look for exact match first, then for a partial match
-    match = re.search(r"^##+ ({0})$\r?\n\r?\n^(.*)$".format(query), page, re.MULTILINE + re.IGNORECASE)
-    if not match:
-        match = re.search(r"^##+ ({0}.*)$\r?\n\r?\n^(.*)$".format(query), page, re.MULTILINE + re.IGNORECASE)
-    if not match:
+    try:
+        page = parsed["query"]["pages"].popitem()[1]["extract"]
+    except KeyError:
+        reply(cli, nick, chan, messages["wiki_no_role_info"], private=True)
+        return
+
+    # Role pages all have the in game role description in italics near the start
+    # The api strips out all the formatting, try to detect and remove that message here
+    output = re.search(r"(?:You are .*?\w\.)?(\w[^\n]+)", page)
+    if not output:
         cli.notice(nick, messages["wiki_no_role_info"])
         return
 
-    # wiki links only have lowercase ascii chars, and spaces are replaced with a dash
-    wikilink = "https://github.com/lykoss/lykos/wiki#{0}".format("".join(
-                x.lower() for x in match.group(1).replace(" ", "-") if x in string.ascii_letters+"-"))
+    wikilink = "https://werewolf.chat/{0}".format(rest.capitalize())
     if nick == chan:
         pm(cli, nick, wikilink)
-        pm(cli, nick, var.break_long_message(match.group(2).split()))
+        pm(cli, nick, var.break_long_message(output.group(1).split()))
     else:
         cli.msg(chan, wikilink)
-        cli.notice(nick, var.break_long_message(match.group(2).split()))
+        cli.notice(nick, var.break_long_message(output.group(1).split()))
 
 @hook("invite")
 def on_invite(cli, raw_nick, something, chan):
